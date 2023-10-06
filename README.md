@@ -10,6 +10,8 @@
 
 ## Usage
 
+export PATH="$HOME/.r2env/bin:$PATH"
+r2env use radare2@git    
 python3 bof_aeg.py challenge_path
 
 

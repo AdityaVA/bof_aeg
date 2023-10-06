@@ -6,7 +6,9 @@ from py import process
 import r2pipe
 import json
 import sys
-
+import argparse
+import json
+import logging
 import IPython
 
 import angr
@@ -16,6 +18,18 @@ from my_utils import *
 pwn.context.log_level = 'debug'
 pwn.context.arch = 'amd64'
 
+logging.basicConfig()
+logging.root.setLevel(logging.INFO)
+
+log = logging.getLogger(__name__)
+
+def is_valid_file(filename):
+    try:
+        file = open(filename, 'r')
+        return True
+    except Exception as e:
+        log.error("Error:", e)
+        exit(1)
 ############# 自定义函数 #############
 class angr_gets(angr.SimProcedure):
     #pylint:disable=arguments-differ
@@ -521,14 +535,26 @@ class Bof_Aeg(object):
 
 if __name__ == '__main__':
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-f", "--file", help="File to exploit")
+    parser.add_argument("-t", "--template", help="Template file path")
+
+    args = parser.parse_args()
+
+    binary = args.file
+    template = args.template
+    if not is_valid_file(binary) or not is_valid_file(template):
+        exit(1)
+    template = json.load(open(template))
     global filepath
-    filepath = sys.argv[1]
-
+    filepath = args.file
     global inputpath, outputpath
-    inputpath = "./input.txt"
-    outputpath = "./output.txt"
+    inputpath = template["inputpath"]
+    outputpath = template["outputpath"]
 
-    libpath = "/home/kirito/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/"
+    # libpath = "/home/aditya/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/"
+    libpath = template["libpath"]
+    # libpath = "/home/aditya/Documents/UGRC/bof_aeg"
     init_profile(filepath, libpath, inputpath, outputpath)
 
     pwn.ctx.binary = filepath
@@ -544,12 +570,14 @@ if __name__ == '__main__':
 
     global static_r2
     static_r2 = r2pipe.open(filepath) if not elf.pie \
-        else r2pipe.open(filepath,flags=['-B','0x555555554000'])
-    static_r2.cmd('aaa')
+        else r2pipe.open(filepath,flags=['-B','0x555555554000']) 
+        # These flags are used to set the base address of the executable to 0x555555554000
+    static_r2.cmd('aaa') #analyze all
     
     plt = {}
     for i in json.loads(static_r2.cmd('iij')):
-        if i['plt'] and i['plt'] != 0x555555554000: plt[i['name']] = i['plt']
+        #command iij retrieves information about all the functions in the binary and returns the result as JSON data.
+        if 'plt' in i.keys() and i['plt'] and i['plt'] != 0x555555554000: plt[i['name']] = i['plt']
     elf.plt = plt
     
     global bof_aeg
