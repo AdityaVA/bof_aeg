@@ -1,7 +1,5 @@
 #!/path/to/rarun2
-program=challenges/tamilctf2021_name
-stdin=./input.txt
-stdout=./output.txt
-libpath=/home/aditya/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/
-preload=/home/aditya/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/ld-linux-x86-64.so.2
+program=challenges/nahamconctf2021_smol
+stdin=/home/aditya/Documents/UGRC/bof_aeg/input.txt
+stdout=/home/aditya/Documents/UGRC/bof_aeg/output.txt
 aslr=no

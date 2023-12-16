@@ -2,8 +2,10 @@
 	"run_format" : ["../examples/vuln", "stdin"],
 	"sources":["main"],
 	"sinks":["gets", "strcpy"],
-	"exec" : "win", 
-    "libpath" : "/home/aditya/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/",
-    "inputpath" : "./input.txt", 
-    "outputpath" : "./output.txt"
+	"exec" : "lol", 
+    "libpath" : "/usr/lib/",
+    "inputpath" : "/home/aditya/Documents/UGRC/bof_aeg/input.txt", 
+    "outputpath" : "/home/aditya/Documents/UGRC/bof_aeg/output.txt",
+	"exploitfile" : "exp" , 
+	"flag_start" : "flag"
 }

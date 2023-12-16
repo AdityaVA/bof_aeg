@@ -25,8 +25,6 @@ def init_profile(filepath, libpath, inputpath, outputpath):
 program={filepath}
 stdin={inputpath}
 stdout={outputpath}
-libpath={libpath}
-preload={libpath}ld-linux-x86-64.so.2
 aslr=no
 """.format(filepath=filepath, libpath=libpath, inputpath=inputpath, outputpath=outputpath)
     

